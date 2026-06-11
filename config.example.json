@@ -1,0 +1,40 @@
+{
+  "api": {
+    "base_url": "https://api.deepseek.com",
+    "api_key": "在这里填入你的 DeepSeek API key",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.3,
+    "max_tokens": 4096
+  },
+  "vlm": {
+    "enabled": false,
+    "base_url": "",
+    "api_key": "",
+    "model": ""
+  },
+  "perception": {
+    "uia": { "enabled": true, "priority": 1 },
+    "win32": { "enabled": true, "priority": 2 },
+    "ocr": { "enabled": true, "priority": 3 },
+    "cv": { "enabled": true, "priority": 4 },
+    "vlm": { "enabled": false, "priority": 5 }
+  },
+  "agent": {
+    "max_steps": 40,
+    "max_retries": 2,
+    "dry_run": false,
+    "experience_memory": true,
+    "shell_enabled": true
+  },
+  "ocr": {
+    "use_gpu": true,
+    "min_confidence": 0.55
+  },
+  "search": {
+    "everything_es_path": ""
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765
+  }
+}

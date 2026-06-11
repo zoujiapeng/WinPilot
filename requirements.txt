@@ -1,0 +1,13 @@
+# WinPilot 运行依赖（Python 3.10+，Windows）
+openai>=1.0
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.0
+uiautomation>=2.0
+pywin32>=306
+opencv-python>=4.9
+mss>=9.0
+numpy>=1.24
+rapidocr-onnxruntime>=1.2
+onnxruntime>=1.17
+# GPU(DirectML)加速 OCR 可选：onnxruntime-directml

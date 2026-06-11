@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinPilot · DeepSeek 电脑操控 Agent</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <h1>WinPilot</h1>
+    <span class="tagline">deepseek-v4-flash · 多维感知操控</span>
+  </div>
+  <div class="badges">
+    <span class="badge" id="badge-run">空闲</span>
+    <span class="badge" id="badge-model">—</span>
+    <span class="badge" id="badge-ocr" title="OCR 实际运行的 provider">OCR: —</span>
+    <span class="badge" id="badge-dims" title="启用的感知维度(按优先级)">维度: —</span>
+    <span class="badge" id="badge-admin" title="进程权限">权限: —</span>
+    <span class="badge" id="badge-tokens" title="prompt/completion/cache命中 + 费用估算">tokens: 0/0 (cache 0) ¥0</span>
+    <button class="iconbtn" id="btn-settings" title="设置">⚙</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- 左：聊天 -->
+  <section class="chat-pane">
+    <div class="pane-head">对话</div>
+    <div class="chat-scroll" id="chat-list"></div>
+    <div class="chat-input">
+      <textarea id="task-input" rows="2"
+        placeholder="描述任务，如：打开记事本，输入&quot;你好世界&quot;，另存为到桌面 test.txt"></textarea>
+      <div class="chat-actions">
+        <button class="primary" id="btn-send">执行任务</button>
+        <button class="danger" id="btn-stop" disabled>停止</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右：执行日志 -->
+  <section class="log-pane">
+    <div class="pane-head">
+      执行日志
+      <label class="mini-toggle"><input type="checkbox" id="log-autoscroll" checked>自动滚动</label>
+      <button class="mini" id="btn-clear-log">清空</button>
+    </div>
+    <div class="log-scroll" id="log-list"></div>
+  </section>
+</main>
+
+<!-- 设置抽屉 -->
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <h2>设置</h2>
+    <button class="iconbtn" id="btn-close-drawer">✕</button>
+  </div>
+  <div class="drawer-body">
+    <h3>感知维度（开关 + 优先级）</h3>
+    <div id="dim-list" class="dim-list"></div>
+    <p class="hint">数字越小优先级越高。关掉 UIA 可验证 OCR/CV 路径是否独立可用 —— 每条日志和元素都标注 src 来源。</p>
+
+    <h3>Agent</h3>
+    <div class="form-grid">
+      <label>最大步数 <input type="number" id="cfg-max-steps" min="1" max="200"></label>
+      <label>验证重试次数 <input type="number" id="cfg-max-retries" min="0" max="10"></label>
+      <label class="row"><input type="checkbox" id="cfg-dry-run"> Dry-run（只记录不执行）</label>
+      <label class="row"><input type="checkbox" id="cfg-experience"> 经验记忆</label>
+      <label class="row"><input type="checkbox" id="cfg-shell"> 允许命令行（关闭=强制纯GUI模式）</label>
+      <button class="mini" id="btn-clear-memory">清空经验记忆</button>
+    </div>
+
+    <h3>权限</h3>
+    <div class="form-grid">
+      <span class="hint" id="admin-line">当前权限: —</span>
+      <button class="mini" id="btn-elevate">以管理员重启（弹一次 UAC）</button>
+      <span class="hint">提权后可操控管理员窗口、写系统目录，Everything(es.exe) 也能连上。</span>
+    </div>
+
+    <h3>模型</h3>
+    <div class="form-grid">
+      <label>模型
+        <select id="cfg-model">
+          <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+          <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+        </select>
+      </label>
+      <label>Temperature <input type="number" id="cfg-temperature" step="0.1" min="0" max="2"></label>
+      <label>API Key <input type="password" id="cfg-api-key" placeholder="不修改请留空"></label>
+    </div>
+
+    <h3>VLM（可选多模态）</h3>
+    <div class="form-grid">
+      <label class="row"><input type="checkbox" id="cfg-vlm-enabled"> 启用 VLM</label>
+      <label>Base URL <input type="text" id="cfg-vlm-url" placeholder="http://127.0.0.1:8080/v1"></label>
+      <label>模型名 <input type="text" id="cfg-vlm-model" placeholder="qwen2.5-vl"></label>
+      <label>API Key <input type="password" id="cfg-vlm-key" placeholder="可空"></label>
+    </div>
+
+    <h3>OCR</h3>
+    <div class="form-grid">
+      <label class="row"><input type="checkbox" id="cfg-ocr-gpu"> GPU 加速 (DirectML)</label>
+      <span class="hint" id="ocr-provider-line">当前 provider: —</span>
+    </div>
+
+    <h3>Trace / 脚本</h3>
+    <div id="trace-list" class="trace-list"></div>
+    <h4>可重放脚本</h4>
+    <div id="script-list" class="trace-list"></div>
+  </div>
+</aside>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

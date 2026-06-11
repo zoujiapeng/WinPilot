@@ -1,0 +1,26 @@
+# Secrets / runtime config (contains API key — never commit)
+config.json
+
+# Runtime artifacts
+traces/
+scripts/
+experience_memory.json
+.restart_marker.txt
+@AutomationLog.txt
+
+# Downloaded binary (user fetches via setup)
+winpilot/bin/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
