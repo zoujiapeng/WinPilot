@@ -74,6 +74,34 @@ def detect_icon_candidates(region: Region, max_items: int = 40) -> list[UIElemen
         return []
 
 
+def list_templates() -> list[str]:
+    """Names of available image templates (templates_img/*.png)."""
+    try:
+        return sorted(p.stem for p in TEMPLATES_IMG_DIR.glob("*.png"))
+    except OSError:
+        return []
+
+
+def save_template(region: Region, name: str) -> Path:
+    """Capture a screen region into templates_img/<name>.png for find_image.
+
+    This is how the icon library gets built up over time — the agent (or the
+    user) snapshots an icon once, then template matching can find it later.
+    """
+    safe = "".join(c for c in name if c.isalnum() or c in "-_")[:80]
+    if not safe:
+        raise ValueError("模板名无效（去除特殊字符后为空），请用中英文/数字命名")
+    TEMPLATES_IMG_DIR.mkdir(exist_ok=True)
+    path = TEMPLATES_IMG_DIR / f"{safe}.png"
+    image = capture(region.clamp_to_screen())
+    ok, buf = cv2.imencode(".png", image)
+    if not ok:
+        raise RuntimeError("PNG 编码失败")
+    buf.tofile(str(path))  # tofile handles non-ASCII paths on Windows
+    logger.info("已保存模板: %s (%dx%d)", path.name, region.width, region.height)
+    return path
+
+
 def match_template(
     template_name: str,
     region: Region | None = None,

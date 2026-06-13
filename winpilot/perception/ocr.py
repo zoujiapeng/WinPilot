@@ -86,10 +86,17 @@ def active_provider() -> str:
     return _active_provider
 
 
-def recognize(image: np.ndarray, origin: tuple[int, int] = (0, 0)) -> list[UIElement]:
-    """OCR an BGR image; map results to screen coords using `origin` offset."""
+def recognize(image: np.ndarray, origin: tuple[int, int] = (0, 0),
+              min_conf: float | None = None) -> list[UIElement]:
+    """OCR an BGR image; map results to screen coords using `origin` offset.
+
+    ``min_conf=None`` uses the configured threshold; escalation/retry paths
+    pass a lower value so faint or small text isn't filtered out when the
+    normal pass came back empty.
+    """
     engine = get_engine()
-    min_conf = float(CONFIG.get("ocr", "min_confidence", default=0.55))
+    if min_conf is None:
+        min_conf = float(CONFIG.get("ocr", "min_confidence", default=0.55))
     ox, oy = origin
     try:
         result, _elapsed = engine(image)
@@ -124,18 +131,20 @@ def recognize(image: np.ndarray, origin: tuple[int, int] = (0, 0)) -> list[UIEle
     return elements
 
 
-def collect(region: Region) -> list[UIElement]:
+def collect(region: Region, min_conf: float | None = None) -> list[UIElement]:
     """OCR a screen region (e.g. the target window). Never raises."""
     try:
         region = region.clamp_to_screen()
         image = capture(region)
-        return recognize(image, origin=(region.left, region.top))
+        return recognize(image, origin=(region.left, region.top), min_conf=min_conf)
     except Exception as exc:
         logger.warning("OCR collect 失败: %s", exc)
         return []
 
 
-def find_text(region: Region, needle: str) -> list[UIElement]:
+def find_text(region: Region, needle: str,
+              min_conf: float | None = None) -> list[UIElement]:
     """All OCR hits containing the substring (case-insensitive)."""
     needle_lower = needle.lower()
-    return [e for e in collect(region) if needle_lower in e.text.lower()]
+    return [e for e in collect(region, min_conf=min_conf)
+            if needle_lower in e.text.lower()]

@@ -122,6 +122,48 @@ function renderEvent(ev) {
       addLog("验证", "verify", frag, ev.ts);
       return;
     }
+    case "agent_plan": {
+      const steps = ev.plan || [];
+      const done = steps.filter((s) => s.done).length;
+      const frag = document.createDocumentFragment();
+      const label = ev.action === "complete" ? `完成子目标 ${ev.index}` :
+        ev.action === "revise" ? "更新计划" : "制定计划";
+      frag.appendChild(document.createTextNode(`${label} (${done}/${steps.length})`));
+      const ul = el("div", "plan-todo");
+      steps.forEach((s, i) => {
+        ul.appendChild(el("div", s.done ? "todo-done" : "todo-pending",
+          `${s.done ? "☑" : "☐"} ${i + 1}. ${s.goal}`));
+      });
+      frag.appendChild(ul);
+      addLog("计划", "agent", frag, ev.ts);
+      return;
+    }
+    case "world": {
+      // Only surface noteworthy state — avoid per-step spam.
+      if ((ev.repeated || 0) >= 2 || (ev.identical_observes || 0) >= 1) {
+        addLog("世界", "verify",
+          `重复动作×${ev.repeated} 无变化×${ev.identical_observes}` +
+          (ev.last_change ? ` | ${ev.last_change}` : ""), ev.ts);
+      }
+      return;
+    }
+    case "agent_recovery":
+      addLog("恢复", "error", `首次 fail 被拦截，要求换思路再试: ${ev.reason || ""}`, ev.ts);
+      return;
+    case "playbook":
+      addLog("攻略", "agent", `运行中注入 playbook: ${ev.name}（触发窗口: ${ev.trigger}）`, ev.ts);
+      return;
+    case "memory":
+      addLog("记忆", "agent",
+        ev.action === "remember" ? `记住: ${ev.note}` :
+        ev.action === "forget" ? `忘掉 ${ev.count} 条 (匹配"${ev.query}")` :
+        ev.action === "reuse" ? `复用上次成功流程: ${ev.task}` :
+        JSON.stringify(ev), ev.ts);
+      refreshMemory();
+      return;
+    case "session":
+      refreshSession();
+      return;
     case "agent_usage": {
       const t = ev.total || {};
       const cost = t.cost_cny != null ? ` ¥${Number(t.cost_cny).toFixed(4)}` : "";
@@ -138,6 +180,7 @@ function renderEvent(ev) {
       addLog("agent", ev.status === "done" ? "agent" : "error",
         `结束 status=${ev.status} 动作步数=${ev.steps}`, ev.ts);
       refreshTraces();
+      refreshSession();
       return;
     }
     case "agent_error":
@@ -256,6 +299,7 @@ function fillSettings() {
   $("cfg-max-retries").value = config.agent.max_retries;
   $("cfg-dry-run").checked = !!config.agent.dry_run;
   $("cfg-experience").checked = !!config.agent.experience_memory;
+  if ($("cfg-no-steal")) $("cfg-no-steal").checked = !!config.agent.no_mouse_steal;
   $("cfg-model").value = config.api.model;
   $("cfg-temperature").value = config.api.temperature;
   $("cfg-vlm-enabled").checked = !!config.vlm.enabled;
@@ -269,6 +313,7 @@ function bindSettings() {
   $("cfg-dry-run").onchange = (e) => patchConfig({ agent: { dry_run: e.target.checked } });
   $("cfg-experience").onchange = (e) => patchConfig({ agent: { experience_memory: e.target.checked } });
   $("cfg-shell").onchange = (e) => patchConfig({ agent: { shell_enabled: e.target.checked } });
+  $("cfg-no-steal").onchange = (e) => patchConfig({ agent: { no_mouse_steal: e.target.checked } });
   $("cfg-model").onchange = (e) => patchConfig({ api: { model: e.target.value } });
   $("cfg-temperature").onchange = (e) => patchConfig({ api: { temperature: Number(e.target.value) } });
   $("cfg-api-key").onchange = (e) => {
@@ -287,8 +332,33 @@ function bindSettings() {
   };
   $("cfg-ocr-gpu").onchange = (e) => patchConfig({ ocr: { use_gpu: e.target.checked } });
   $("btn-clear-memory").onclick = async () => {
+    if (!confirm("确定清空全部经验记忆？")) return;
     await api("/api/memory", { method: "DELETE" });
     addLog("memory", "agent", "经验记忆已清空");
+    refreshMemory();
+  };
+  $("btn-refresh-memory").onclick = refreshMemory;
+  $("btn-refresh-session").onclick = refreshSession;
+  $("btn-clear-session").onclick = async () => {
+    if (!confirm("清空本会话上下文？('再来一次'等指代将失去锚点)")) return;
+    await api("/api/session", { method: "DELETE" });
+    refreshSession();
+  };
+  $("btn-add-memory").onclick = async () => {
+    const task = prompt("记忆标题（任务/备忘内容）:");
+    if (!task || !task.trim()) return;
+    const app = prompt("关联应用名（可空）:") || "";
+    const stepsRaw = prompt("步骤（每行一条，可空）:") || "";
+    const steps = stepsRaw.split("\n").map((s) => s.trim()).filter(Boolean);
+    try {
+      await api("/api/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: task.trim(), app, steps }),
+      });
+      addLog("memory", "agent", `已新增记忆: ${task.trim()}`);
+      refreshMemory();
+    } catch (err) { addLog("memory", "error", `新增失败: ${err.message}`); }
   };
   $("btn-elevate").onclick = async () => {
     if (!confirm("将弹出 UAC 并以管理员身份重启 WinPilot。当前任务会中断，确定？")) return;
@@ -301,6 +371,65 @@ function bindSettings() {
 }
 
 /* ========================= traces & scripts ========================= */
+async function refreshSession() {
+  try {
+    const items = await api("/api/session");
+    const wrap = $("session-list");
+    wrap.textContent = "";
+    if (!items.length) { wrap.appendChild(el("span", "hint", "（本会话暂无历史）")); return; }
+    items.forEach((s) => {
+      const row = el("div", "trace-row");
+      const cls = s.status === "done" ? "" : "fail-mark";
+      row.appendChild(el("span", `t-name ${cls}`, `${s.task}`));
+      row.appendChild(el("span", "t-status", s.status));
+      wrap.appendChild(row);
+    });
+  } catch (_e) { /* noop */ }
+}
+
+async function refreshMemory() {
+  try {
+    const recipes = await api("/api/memory");
+    const wrap = $("memory-list");
+    wrap.textContent = "";
+    if (!recipes.length) { wrap.appendChild(el("span", "hint", "（无记忆条目）")); return; }
+    recipes.forEach((r) => {
+      const row = el("div", "trace-row");
+      const stat = r.provisional ? "⚠未验证" :
+        (r.uses ? `${r.successes}/${r.uses}成` : "");
+      row.appendChild(el("span", "t-name",
+        `${r.script ? "⭐ " : ""}${r.task}${r.app ? " · " + r.app : ""} ${stat}`));
+      const editBtn = el("button", "mini", "改");
+      editBtn.onclick = async () => {
+        const task = prompt("标题:", r.task);
+        if (task === null) return;
+        const steps = prompt("步骤（每行一条）:", (r.steps || []).join("\n"));
+        if (steps === null) return;
+        try {
+          await api(`/api/memory/${r.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task: task.trim(),
+              steps: steps.split("\n").map((s) => s.trim()).filter(Boolean),
+            }),
+          });
+          refreshMemory();
+        } catch (err) { addLog("memory", "error", `修改失败: ${err.message}`); }
+      };
+      const delBtn = el("button", "mini", "删");
+      delBtn.onclick = async () => {
+        try {
+          await api(`/api/memory/${r.id}`, { method: "DELETE" });
+          refreshMemory();
+        } catch (err) { addLog("memory", "error", `删除失败: ${err.message}`); }
+      };
+      row.append(editBtn, delBtn);
+      wrap.appendChild(row);
+    });
+  } catch (_e) { /* noop */ }
+}
+
 async function refreshTraces() {
   try {
     const traces = await api("/api/traces");
@@ -357,6 +486,8 @@ async function main() {
   refreshStatus();
   refreshTraces();
   refreshScripts();
+  refreshMemory();
+  refreshSession();
   setInterval(refreshStatus, 4000);
 
   $("btn-send").onclick = async () => {

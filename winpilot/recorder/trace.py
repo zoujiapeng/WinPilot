@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -25,6 +26,26 @@ from ..utils.screenshot import capture
 
 _SCREENSHOT_TOOLS = {"click", "type_text", "hotkey", "launch", "drag", "scroll"}
 _SCREENSHOT_MAX_W = 960
+
+# Volatile tokens that make a text selector unstable across runs (unread
+# counts, badges) — strip them so "计技25A葛瑞念 消息: 132" → "计技25A葛瑞念".
+_VOLATILE_PATTERNS = [
+    re.compile(r"\s*消息[:：]\s*\d+"),
+    re.compile(r"\s*\d+\s*条(新)?消息"),
+    re.compile(r"\s*\(\d+\)\s*$"),
+    re.compile(r"\s*\[\d+\]\s*$"),
+    re.compile(r"\s*未读\s*\d+"),
+]
+
+
+def clean_selector_text(text: str) -> str:
+    """Strip volatile tokens from a text selector; collapse whitespace."""
+    if not text:
+        return text
+    out = text
+    for pat in _VOLATILE_PATTERNS:
+        out = pat.sub("", out)
+    return re.sub(r"\s+", " ", out).strip() or text
 
 
 class TraceRecorder:
@@ -153,6 +174,25 @@ def read_trace(run_id: str, limit: int = 2000) -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------- export
+def _distill_steps(steps: list[dict]) -> list[dict]:
+    """Clean a raw replay-step list into a reusable procedure: clean volatile
+    text selectors and drop consecutive duplicate steps (re-tries/floundering).
+    Conservative — keeps every distinct action, only removes obvious noise."""
+    distilled: list[dict] = []
+    prev_key = None
+    for raw in steps:
+        step = dict(raw)
+        for field in ("text", "element_text"):
+            if step.get(field):
+                step[field] = clean_selector_text(step[field])
+        key = json.dumps(step, ensure_ascii=False, sort_keys=True, default=str)
+        if key == prev_key:  # identical consecutive step → drop the repeat
+            continue
+        prev_key = key
+        distilled.append(step)
+    return distilled
+
+
 def export_script(run_id: str, name: str | None = None) -> Path:
     """Distill a trace into a replayable .wps.json script."""
     events = read_trace(run_id)
@@ -166,6 +206,7 @@ def export_script(run_id: str, name: str | None = None) -> Path:
     ]
     if not steps:
         raise ValueError("trace 中没有可重放的动作步骤")
+    steps = _distill_steps(steps)
     script = {
         "format": "wps/1",
         "name": name or task[:60] or run_id,

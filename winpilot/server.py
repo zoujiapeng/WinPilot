@@ -8,6 +8,7 @@ import asyncio
 import ctypes
 import json
 import queue
+import re
 import sys
 import threading
 from pathlib import Path
@@ -20,12 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .agent.loop import AgentRunner
+from .agent.session import SESSION
 from .config import CONFIG, ROOT_DIR, SCRIPTS_DIR, TRACES_DIR
 from .perception import ocr, vlm
 from .recorder import trace as trace_mod
 from .utils.log import BUS, logger
 
 WEBUI_DIR = ROOT_DIR / "webui"
+_RECIPE_ID_RE = re.compile(r"^[0-9a-f]{6,32}$")
 
 app = FastAPI(title="WinPilot", docs_url=None, redoc_url=None)
 
@@ -36,7 +39,7 @@ _origin = (
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[_origin],
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -81,6 +84,19 @@ class ChatRequest(BaseModel):
     task: str
 
 
+class MemoryAddRequest(BaseModel):
+    task: str
+    app: str = ""
+    steps: list[str] = []
+
+
+class MemoryPatchRequest(BaseModel):
+    task: str | None = None
+    app: str | None = None
+    steps: list[str] | None = None
+    provisional: bool | None = None
+
+
 class ReplayRequest(BaseModel):
     script: str
 
@@ -99,14 +115,17 @@ def start_chat(req: ChatRequest) -> dict[str, Any]:
         if STATE.busy():
             raise HTTPException(409, "已有任务在运行，请先停止")
         STATE.stop_event = threading.Event()
-        runner = AgentRunner(task, stop_event=STATE.stop_event)
+        runner = AgentRunner(task, stop_event=STATE.stop_event,
+                             session_context=SESSION.recent())
         STATE.runner = runner
         trace_mod.RECORDER.start(runner.run_id)
         BUS.publish("chat", run_id=runner.run_id, role="user", content=task)
 
         def worker() -> None:
             try:
-                runner.run()
+                result = runner.run()
+                SESSION.append(task, runner.status, runner.result_text, runner.run_id)
+                BUS.publish("session", action="append", count=len(SESSION.all()))
             finally:
                 trace_mod.RECORDER.stop()
 
@@ -142,7 +161,7 @@ def status() -> dict[str, Any]:
         "running": STATE.busy(),
         "run_id": runner.run_id if runner else None,
         "run_status": runner.status if runner else None,
-        "usage": runner.usage_total if runner else None,
+        "usage": dict(runner.usage_total) if runner else None,
         "ocr_provider": ocr.active_provider(),
         "vlm_configured": vlm.is_configured(),
         "enabled_dimensions": CONFIG.enabled_dimensions(),
@@ -259,10 +278,55 @@ def memory_list() -> list[dict[str, Any]]:
     return experience.all_recipes()
 
 
+@app.post("/api/memory")
+def memory_add(req: MemoryAddRequest) -> dict[str, Any]:
+    from .memory import experience
+    if not req.task.strip():
+        raise HTTPException(400, "task 不能为空")
+    return experience.add(req.task.strip(), req.app.strip(), req.steps)
+
+
+@app.put("/api/memory/{recipe_id}")
+def memory_update(recipe_id: str, req: MemoryPatchRequest) -> dict[str, Any]:
+    from .memory import experience
+    if not _RECIPE_ID_RE.fullmatch(recipe_id):
+        raise HTTPException(404, "记忆条目不存在")
+    # exclude_unset distinguishes "field not sent" from explicit false/empty.
+    patch = req.model_dump(exclude_unset=True)
+    if not patch:
+        raise HTTPException(400, "没有要修改的字段")
+    updated = experience.update(recipe_id, patch)
+    if updated is None:
+        raise HTTPException(404, "记忆条目不存在")
+    return updated
+
+
+@app.delete("/api/memory/{recipe_id}")
+def memory_delete(recipe_id: str) -> dict[str, Any]:
+    from .memory import experience
+    if not _RECIPE_ID_RE.fullmatch(recipe_id):
+        raise HTTPException(404, "记忆条目不存在")
+    if not experience.delete(recipe_id):
+        raise HTTPException(404, "记忆条目不存在")
+    return {"ok": True}
+
+
 @app.delete("/api/memory")
 def memory_clear() -> dict[str, Any]:
     from .memory import experience
     experience.clear()
+    return {"ok": True}
+
+
+@app.get("/api/session")
+def session_list() -> list[dict[str, Any]]:
+    return SESSION.all()
+
+
+@app.delete("/api/session")
+def session_clear() -> dict[str, Any]:
+    SESSION.clear()
+    BUS.publish("session", action="clear", count=0)
     return {"ok": True}
 
 

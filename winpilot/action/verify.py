@@ -24,7 +24,7 @@ from typing import Any, Callable
 import win32gui
 
 from ..config import CONFIG
-from ..perception import fusion, ocr, vision_cv, win32
+from ..perception import fusion, groundtruth, ocr, vision_cv, win32
 from ..utils.log import BUS, logger
 from ..utils.screenshot import Region, screen_size, window_region
 
@@ -35,7 +35,7 @@ _COLOR_DEFAULT_TOLERANCE = 40
 SUPPORTED_CONDITIONS = (
     "text_appears", "text_gone", "window_appears", "window_gone",
     "screen_stable", "color_match",
-)
+) + groundtruth.GROUNDTRUTH_KEYS
 
 
 @dataclass
@@ -101,8 +101,9 @@ def _find_text(needle: str, hwnd: int | None, level: int) -> tuple[bool, str]:
         return False, ""
 
     # Level 2: full-screen OCR — catches toasts/dialogs outside the window.
+    # Last resort, so trade precision for recall with a lowered threshold.
     try:
-        if ocr.find_text(_full_screen_region(), needle):
+        if ocr.find_text(_full_screen_region(), needle, min_conf=0.4):
             return True, "ocr-fullscreen"
     except Exception as exc:
         logger.debug("verify: 全屏 OCR 失败: %s", exc)
@@ -135,20 +136,25 @@ def _check_color(spec: dict, _hwnd: int | None) -> tuple[bool, str]:
     return ok, f"期望RGB{tuple(expected)} 实际{actual} 最大偏差{distance}"
 
 
-def _check_screen_stable(spec: Any, hwnd: int | None) -> tuple[bool, str]:
+def _check_screen_stable(spec: Any, hwnd: int | None,
+                         deadline: float | None = None) -> tuple[bool, str]:
     opts = spec if isinstance(spec, dict) else {}
     target = _target_hwnd(hwnd)
     region = window_region(target) if target else _full_screen_region()
+    timeout = float(opts.get("timeout_s", 10.0))
+    if deadline is not None:  # never overrun the outer verify budget
+        timeout = max(0.5, min(timeout, deadline - time.monotonic()))
     result = vision_cv.wait_screen_stable(
         region,
         stable_ms=int(opts.get("stable_ms", 600)),
-        timeout_s=float(opts.get("timeout_s", 10.0)),
+        timeout_s=timeout,
     )
     return result["stable"], f"等待{result['waited_s']}s"
 
 
 # ----------------------------------------------------------------- evaluate
-def _eval_once(expect: dict, hwnd: int | None, level: int) -> VerifyOutcome:
+def _eval_once(expect: dict, hwnd: int | None, level: int,
+               deadline: float | None = None) -> VerifyOutcome:
     """Evaluate every condition in the expect dict once (AND semantics)."""
     for key, value in expect.items():
         if key == "text_appears":
@@ -168,13 +174,21 @@ def _eval_once(expect: dict, hwnd: int | None, level: int) -> VerifyOutcome:
             if not ok:
                 return VerifyOutcome(False, f'窗口 "{title}" 仍存在', "win32")
         elif key == "screen_stable":
-            ok, detail = _check_screen_stable(value, hwnd)
+            ok, detail = _check_screen_stable(value, hwnd, deadline=deadline)
             if not ok:
                 return VerifyOutcome(False, f"画面未稳定 ({detail})", "cv")
         elif key == "color_match":
             ok, detail = _check_color(value, hwnd)
             if not ok:
                 return VerifyOutcome(False, f"颜色不符 ({detail})", "cv")
+        elif key in groundtruth.GROUNDTRUTH_KEYS:
+            # Deterministic ground truth (filesystem/process/shell) — the
+            # strongest signal; no perception escalation needed. Bound any
+            # shell_true to the remaining verify budget so it can't overrun.
+            remaining = max(1.0, deadline - time.monotonic()) if deadline else 15.0
+            ok, detail = groundtruth.check(key, value, timeout_s=remaining)
+            if not ok:
+                return VerifyOutcome(False, f"{key} 未满足 ({detail})", "groundtruth")
         else:
             return VerifyOutcome(False, f"不支持的验证条件: {key}", "")
     return VerifyOutcome(True, "全部条件满足", "")
@@ -189,7 +203,7 @@ def check(expect: dict, hwnd: int | None = None,
     level = 0
     last = VerifyOutcome(False, "未开始", "")
     while True:
-        last = _eval_once(expect, hwnd, level)
+        last = _eval_once(expect, hwnd, level, deadline=deadline)
         elapsed = time.monotonic() - started
         last.elapsed_ms = int(elapsed * 1000)
         if last.verified or time.monotonic() >= deadline:
@@ -230,6 +244,10 @@ def run_with_verify(
     attempts = 0
     result: dict[str, Any] = {}
     outcome: VerifyOutcome | None = None
+    # Hard wall-clock cap so a single action can never hang for minutes
+    # (e.g. screen_stable on a never-settling canvas + slow OCR escalation
+    # × retries). Once exceeded, stop retrying and report the last outcome.
+    overall_deadline = time.monotonic() + max(timeout_s * (max_retries + 1), timeout_s) + 4.0
 
     while True:
         attempts += 1
@@ -249,7 +267,9 @@ def run_with_verify(
             outcome = None
             break
 
-        outcome = check(expect, hwnd=hwnd, timeout_s=timeout_s)
+        # Shrink the verify budget to whatever's left of the overall cap.
+        budget = max(1.0, min(timeout_s, overall_deadline - time.monotonic()))
+        outcome = check(expect, hwnd=hwnd, timeout_s=budget)
         BUS.publish(
             "verify",
             action=name,
@@ -261,7 +281,8 @@ def run_with_verify(
         )
         if outcome.verified:
             break
-        if not retryable or attempts > max_retries or not result.get("ok", True):
+        if (not retryable or attempts > max_retries or not result.get("ok", True)
+                or time.monotonic() >= overall_deadline):
             break
         logger.info("动作 %s 验证失败（第%d次），重试: %s", name, attempts, outcome.detail)
 

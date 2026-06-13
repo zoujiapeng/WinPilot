@@ -1,0 +1,170 @@
+{
+  "total": 3,
+  "passed": 3,
+  "success_rate": 1.0,
+  "avg_steps": 1.3,
+  "total_cost_cny": 0.0182,
+  "total_elapsed_s": 41.0,
+  "results": [
+    {
+      "id": "shell_file",
+      "tags": [
+        "cheap"
+      ],
+      "pass": true,
+      "detail": "存在: C:\\Users\\zou\\Desktop\\winpilot_eval_dir",
+      "agent_status": "reply",
+      "steps": 2,
+      "cost_cny": 0.0071,
+      "elapsed_s": 15.4,
+      "run_ids": [
+        "20260613-010754-fa5736"
+      ]
+    },
+    {
+      "id": "launch_calc",
+      "tags": [
+        "cheap"
+      ],
+      "pass": true,
+      "detail": "进程运行中: calculatorapp.exe",
+      "agent_status": "done",
+      "steps": 1,
+      "cost_cny": 0.0043,
+      "elapsed_s": 18.4,
+      "run_ids": [
+        "20260613-010809-d2b332"
+      ]
+    },
+    {
+      "id": "timer",
+      "tags": [
+        "cheap"
+      ],
+      "pass": true,
+      "detail": "进程运行中: calculatorapp.exe",
+      "agent_status": "reply",
+      "steps": 1,
+      "cost_cny": 0.0068,
+      "elapsed_s": 7.2,
+      "run_ids": [
+        "20260613-010829-e24812"
+      ]
+    }
+  ],
+  "calc_compute,file_write,git_clone,launch_calc,notepad_write,shell_file,timer": {
+    "total": 7,
+    "passed": 7,
+    "success_rate": 1.0,
+    "avg_steps": 2.4,
+    "total_cost_cny": 0.1282,
+    "total_elapsed_s": 436.4,
+    "results": [
+      {
+        "id": "shell_file",
+        "tags": [
+          "cheap"
+        ],
+        "pass": true,
+        "detail": "存在: C:\\Users\\zou\\Desktop\\winpilot_eval_dir",
+        "agent_status": "done",
+        "steps": 2,
+        "cost_cny": 0.0189,
+        "elapsed_s": 17.2,
+        "run_ids": [
+          "20260613-023256-72203f"
+        ]
+      },
+      {
+        "id": "file_write",
+        "tags": [
+          "cheap"
+        ],
+        "pass": true,
+        "detail": "文件含 \"EVALOK123\"",
+        "agent_status": "done",
+        "steps": 3,
+        "cost_cny": 0.0222,
+        "elapsed_s": 27.3,
+        "run_ids": [
+          "20260613-023313-425e91"
+        ]
+      },
+      {
+        "id": "launch_calc",
+        "tags": [
+          "cheap"
+        ],
+        "pass": true,
+        "detail": "进程运行中: calculatorapp.exe",
+        "agent_status": "done",
+        "steps": 1,
+        "cost_cny": 0.0043,
+        "elapsed_s": 7.6,
+        "run_ids": [
+          "20260613-023341-346900"
+        ]
+      },
+      {
+        "id": "timer",
+        "tags": [
+          "cheap"
+        ],
+        "pass": true,
+        "detail": "进程运行中: calculatorapp.exe",
+        "agent_status": "done",
+        "steps": 7,
+        "cost_cny": 0.0296,
+        "elapsed_s": 279.0,
+        "run_ids": [
+          "20260613-023350-04b326"
+        ]
+      },
+      {
+        "id": "git_clone",
+        "tags": [
+          "medium"
+        ],
+        "pass": true,
+        "detail": ".git=True README=True",
+        "agent_status": "done",
+        "steps": 2,
+        "cost_cny": 0.0077,
+        "elapsed_s": 18.2,
+        "run_ids": [
+          "20260613-023831-51a140"
+        ]
+      },
+      {
+        "id": "calc_compute",
+        "tags": [
+          "gui"
+        ],
+        "pass": true,
+        "detail": "回复含408: '任务完成: 打开计算器，计算 12 乘以 34，结果为 **408**。通过复用上次成功流程（14步全部重放成功），计算'",
+        "agent_status": "done",
+        "steps": 0,
+        "cost_cny": 0.0185,
+        "elapsed_s": 45.2,
+        "run_ids": [
+          "20260613-023850-28cfc1"
+        ]
+      },
+      {
+        "id": "notepad_write",
+        "tags": [
+          "gui"
+        ],
+        "pass": true,
+        "detail": "文件含 \"EVALNOTE\"",
+        "agent_status": "done",
+        "steps": 2,
+        "cost_cny": 0.027,
+        "elapsed_s": 41.9,
+        "run_ids": [
+          "20260613-023935-bbfc12"
+        ]
+      }
+    ]
+  }
+}

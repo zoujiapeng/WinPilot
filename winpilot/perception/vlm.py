@@ -49,6 +49,16 @@ def _encode_region(region: Region, max_side: int = 1280) -> tuple[str, float]:
     return base64.b64encode(buf.tobytes()).decode(), scale
 
 
+def _extra_body() -> dict:
+    """MiMo-style reasoning models burn the whole token budget on thinking
+    before emitting JSON — disable it unless explicitly turned on
+    (benchmarked: grounding precision is equal-or-better without thinking).
+    """
+    if CONFIG.get("vlm", "thinking", default=False):
+        return {}
+    return {"thinking": {"type": "disabled"}}
+
+
 def describe(region: Region, question: str) -> str:
     """Ask the configured VLM a question about a screen region."""
     if not is_configured():
@@ -67,8 +77,9 @@ def describe(region: Region, question: str) -> str:
                     ],
                 }
             ],
-            max_tokens=512,
+            max_tokens=800,
             temperature=0.1,
+            extra_body=_extra_body(),
         )
         return resp.choices[0].message.content or ""
     except Exception as exc:
@@ -77,11 +88,35 @@ def describe(region: Region, question: str) -> str:
 
 
 _GROUND_PROMPT = (
-    "List the interactive UI elements visible in this screenshot. "
-    "Reply ONLY with a JSON array, each item: "
-    '{"role": "button|edit|text|icon|link|image", "text": "...", '
-    '"x": <center-x-px>, "y": <center-y-px>}. Coordinates are pixels in this image.'
+    "Locate every interactive UI element and text label in this screenshot. "
+    "Reply ONLY with a JSON array; each item: "
+    '{"role": "button|edit|text|icon|link|checkbox|image", "text": "<text>", '
+    '"box": [x1, y1, x2, y2]} '
+    "where coordinates are NORMALIZED to 0-1000 (top-left origin, "
+    "1000 = right/bottom edge of the image)."
 )
+
+
+def _decode_box(box: list, region: Region, scale: float) -> tuple[int, int, int, int]:
+    """Box -> absolute screen rect (left, top, width, height).
+
+    MiMo / Qwen2.5-VL lineage natively grounds on a 0-1000 normalized grid
+    (verified by benchmark: mean error ~6px once decoded). Normalized coords
+    map directly onto the region — independent of the JPEG downscale. Values
+    > 1000 are treated as pixels in the submitted (possibly scaled) image.
+    """
+    x1, y1, x2, y2 = (float(v) for v in box)
+    if max(x1, y1, x2, y2) <= 1000.0:
+        left = region.left + x1 / 1000 * region.width
+        top = region.top + y1 / 1000 * region.height
+        width = (x2 - x1) / 1000 * region.width
+        height = (y2 - y1) / 1000 * region.height
+    else:
+        left = region.left + x1 / scale
+        top = region.top + y1 / scale
+        width = (x2 - x1) / scale
+        height = (y2 - y1) / scale
+    return int(left), int(top), max(1, int(width)), max(1, int(height))
 
 
 def collect(region: Region) -> list[UIElement]:
@@ -102,8 +137,9 @@ def collect(region: Region) -> list[UIElement]:
                     ],
                 }
             ],
-            max_tokens=1500,
+            max_tokens=3000,
             temperature=0.0,
+            extra_body=_extra_body(),
         )
         raw = resp.choices[0].message.content or "[]"
         start, end = raw.find("["), raw.rfind("]")
@@ -113,15 +149,23 @@ def collect(region: Region) -> list[UIElement]:
         elements = []
         for item in items[:80]:
             try:
-                x = int(int(item["x"]) / scale) + region.left
-                y = int(int(item["y"]) / scale) + region.top
+                box = item.get("box") or []
+                if len(box) != 4:
+                    # Legacy single-point answers: keep a small clickable box.
+                    x = int(int(item["x"]) / scale) + region.left
+                    y = int(int(item["y"]) / scale) + region.top
+                    left, top, width, height = x - 8, y - 8, 16, 16
+                else:
+                    left, top, width, height = _decode_box(box, region, scale)
                 elements.append(
                     UIElement(
                         source="vlm",
                         role=str(item.get("role", "elem")),
                         text=str(item.get("text", "")),
-                        cx=x, cy=y, left=x - 8, top=y - 8, width=16, height=16,
-                        confidence=0.7,
+                        cx=left + width // 2,
+                        cy=top + height // 2,
+                        left=left, top=top, width=width, height=height,
+                        confidence=0.8,
                     )
                 )
             except (KeyError, ValueError, TypeError):

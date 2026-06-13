@@ -24,3 +24,10 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Eval per-run scorecards (baseline.json is kept)
+winpilot/eval/results/
+# Generated bench artifacts
+tests/bench_ui.png
+# Machine-specific captured templates (README kept)
+templates_img/*.png

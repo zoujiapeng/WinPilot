@@ -68,7 +68,28 @@
       <label class="row"><input type="checkbox" id="cfg-dry-run"> Dry-run（只记录不执行）</label>
       <label class="row"><input type="checkbox" id="cfg-experience"> 经验记忆</label>
       <label class="row"><input type="checkbox" id="cfg-shell"> 允许命令行（关闭=强制纯GUI模式）</label>
-      <button class="mini" id="btn-clear-memory">清空经验记忆</button>
+      <label class="row"><input type="checkbox" id="cfg-no-steal"> 🧪 不夺光标（实验：后台点击，不抢你的鼠标）</label>
+    </div>
+
+    <h3>经验记忆管理</h3>
+    <div class="form-grid">
+      <div class="row">
+        <button class="mini" id="btn-refresh-memory">查看/刷新</button>
+        <button class="mini" id="btn-add-memory">新增</button>
+        <button class="mini" id="btn-clear-memory">清空全部</button>
+      </div>
+      <div id="memory-list" class="trace-list"></div>
+      <span class="hint">⭐=有可复用脚本(reuse_skill 可 0-token 重放)。也可对 agent 说「记住…」「忘掉…」。</span>
+    </div>
+
+    <h3>本会话上下文</h3>
+    <div class="form-grid">
+      <div class="row">
+        <button class="mini" id="btn-refresh-session">刷新</button>
+        <button class="mini" id="btn-clear-session">清空会话</button>
+      </div>
+      <div id="session-list" class="trace-list"></div>
+      <span class="hint">记得本会话此前任务，"再来一次/刚才那个"等指代据此理解。重启服务=新会话。</span>
     </div>
 
     <h3>权限</h3>

@@ -1,0 +1,7 @@
+{
+  "name": "tray-wakeup",
+  "description": "托盘/后台程序唤起法",
+  "keywords": ["QQ", "微信", "wechat", "钉钉", "dingtalk", "飞书", "telegram", "消息", "聊天", "发送给", "托盘", "唤起", "通讯"],
+  "window_triggers": ["登录", "扫码"],
+  "content": "# 托盘/后台程序唤起法（重要）\n- QQ/微信/钉钉等程序常驻系统托盘时没有可见窗口，list_windows 看不到它们\n- **绝对禁止对已在运行的即时通讯软件再次 launch**——那会弹出新账号的登录窗口！\n- 正确做法: find_app 显示 running=true 但 has_visible_window=false → 用 tray_click(\"程序名\") 点击托盘图标唤起主窗口（单击无效再试 double=true）\n- 误开了登录窗口就用 hotkey [\"alt\",\"f4\"] 或点关闭按钮关掉它，再走托盘路径"
+}

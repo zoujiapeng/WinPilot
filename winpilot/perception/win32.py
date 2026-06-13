@@ -97,11 +97,19 @@ def list_windows() -> list[dict]:
 
 
 def find_window(title_substr: str) -> dict | None:
-    """First visible window whose title contains the substring (case-insensitive)."""
-    needle = title_substr.lower()
-    for win in list_windows():
-        if needle in win["title"].lower():
-            return win
+    """First visible window whose title contains the substring (case-insensitive).
+
+    Alias-aware: a query like "计算器" also matches a window titled "Calculator",
+    so verify on English-titled built-in apps works.
+    """
+    from .app_aliases import expand
+
+    needles = expand(title_substr) or [title_substr.lower()]
+    windows = list_windows()
+    for needle in needles:  # prefer the literal query first (expand keeps it)
+        for win in windows:
+            if needle in win["title"].lower():
+                return win
     return None
 
 

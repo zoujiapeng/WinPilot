@@ -1,0 +1,7 @@
+{
+  "name": "media-playback",
+  "description": "播放媒体的正确姿势",
+  "keywords": ["播放", "歌", "音乐", "mp3", "mp4", "视频", "媒体", "play", "song", "随机放", "听"],
+  "window_triggers": ["你要如何打开", "选择应用", "打开方式"],
+  "content": "# 播放媒体的正确姿势\n- **用 Start-Process 直接启动播放器程序本体（exe），把媒体路径作为参数**，例如\n  `Start-Process \"$env:ProgramFiles(x86)\\Windows Media Player\\wmplayer.exe\" -ArgumentList '\"歌曲完整路径\"'`\n  要点：(1) Start-Process 的目标是播放器 exe，不是媒体文件；(2) 它非阻塞、播放器会常驻\n- **不要 `Start-Process 歌曲路径`**（走文件关联，可能不留进程=没真播放）\n- **不要 `& \"wmplayer.exe\" 歌曲`**（call 操作符会阻塞等播放器退出，导致 run_shell 超时被杀）\n- **绝不在资源管理器里双击媒体文件**（无默认程序会弹\"你要如何打开此文件\"选择器）\n- 随机播放：search_files 找到 mp3 列表 → 自己随机选一个 → Start-Process wmplayer.exe -ArgumentList 该歌曲\n- **务必验证真的在放**：播放后 run_shell 查 `Get-Process wmplayer` 确认进程存在才算成功，不要只看回显\"已启动\"就报完成\n- 兜底：万一已经撞上\"你要如何打开此文件/选择应用\"弹窗 → 按 Esc 取消 → 改用上面的直调方式"
+}

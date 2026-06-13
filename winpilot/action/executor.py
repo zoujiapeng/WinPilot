@@ -105,15 +105,88 @@ def _dry_run() -> bool:
     return bool(CONFIG.get("agent", "dry_run", default=False))
 
 
+def _no_mouse_steal() -> bool:
+    """Experimental: act without hijacking the user's physical cursor."""
+    return bool(CONFIG.get("agent", "no_mouse_steal", default=False))
+
+
+# ---- no-steal helpers: background message clicks + cursor save/restore ----
+# Windows has a single system cursor, so a true "second mouse" is impossible;
+# instead we click via PostMessage (no cursor move) and, when SendInput is
+# unavoidable, snap the cursor back to where the user left it.
+_WM = {  # button -> (down, up, mk_flag)
+    "left": (win32con.WM_LBUTTONDOWN, win32con.WM_LBUTTONUP, win32con.MK_LBUTTON),
+    "right": (win32con.WM_RBUTTONDOWN, win32con.WM_RBUTTONUP, win32con.MK_RBUTTON),
+    "middle": (win32con.WM_MBUTTONDOWN, win32con.WM_MBUTTONUP, win32con.MK_MBUTTON),
+}
+
+
+def _post_click(x: int, y: int, button: str, double: bool) -> bool:
+    """Background click at screen (x,y) via window messages — no cursor move.
+    Returns False if no target window resolved (caller falls back)."""
+    try:
+        target = win32gui.WindowFromPoint((int(x), int(y)))
+        if not target:
+            return False
+        cx, cy = win32gui.ScreenToClient(target, (int(x), int(y)))
+        lparam = (cy << 16) | (cx & 0xFFFF)
+        down, up, mk = _WM.get(button, _WM["left"])
+        for _ in range(2 if double else 1):
+            win32gui.PostMessage(target, down, mk, lparam)
+            win32gui.PostMessage(target, up, 0, lparam)
+            if double:
+                time.sleep(0.05)
+        return True
+    except Exception as exc:
+        logger.debug("post_click 失败: %s", exc)
+        return False
+
+
+def _cursor_pos() -> tuple[int, int]:
+    return win32api.GetCursorPos()
+
+
+def _restore_cursor(pos: tuple[int, int]) -> None:
+    try:
+        win32api.SetCursorPos(pos)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- mouse API
 def move_mouse(x: int, y: int) -> None:
     user32.SetCursorPos(int(x), int(y))
 
 
 def click(x: int, y: int, button: str = "left", double: bool = False, hwnd: int | None = None) -> dict:
-    """Click at screen coords. Brings target window forward first if given."""
+    """Click at screen coords. Brings target window forward first if given.
+
+    In no-mouse-steal mode, clicks go through background window messages (the
+    user's physical cursor is never moved); falls back to SendInput with a
+    cursor snap-back if the message click can't resolve a target.
+    """
     if _dry_run():
         return {"ok": True, "dry_run": True}
+    if _no_mouse_steal():
+        if _post_click(x, y, button, double):
+            BUS.publish("action", action="click", x=x, y=y, button=button,
+                        double=double, via="post_message")
+            return {"ok": True, "x": x, "y": y, "via": "post_message"}
+        # fallback: must use SendInput, but restore the user's cursor afterwards
+        saved = _cursor_pos()
+        try:
+            _raw_click(x, y, button, double, hwnd)
+        finally:
+            _restore_cursor(saved)
+        BUS.publish("action", action="click", x=x, y=y, button=button,
+                    double=double, via="sendinput_restored")
+        return {"ok": True, "x": x, "y": y, "via": "sendinput_restored"}
+    _raw_click(x, y, button, double, hwnd)
+    BUS.publish("action", action="click", x=x, y=y, button=button, double=double)
+    return {"ok": True, "x": x, "y": y}
+
+
+def _raw_click(x: int, y: int, button: str, double: bool, hwnd: int | None) -> None:
     if hwnd:
         focus_window(hwnd)
     move_mouse(x, y)
@@ -126,18 +199,18 @@ def click(x: int, y: int, button: str = "left", double: bool = False, hwnd: int 
         down, up = win32con.MOUSEEVENTF_MIDDLEDOWN, win32con.MOUSEEVENTF_MIDDLEUP
     else:
         raise ValueError(f"未知鼠标键: {button}")
-    repeats = 2 if double else 1
-    for _ in range(repeats):
+    for _ in range(2 if double else 1):
         _send_inputs([_mouse_input(down), _mouse_input(up)])
         if double:
             time.sleep(0.06)
-    BUS.publish("action", action="click", x=x, y=y, button=button, double=double)
-    return {"ok": True, "x": x, "y": y}
 
 
 def drag(x1: int, y1: int, x2: int, y2: int, duration_s: float = 0.4) -> dict:
     if _dry_run():
         return {"ok": True, "dry_run": True}
+    # drag inherently needs a moving cursor; in no-steal mode we still snap the
+    # user's cursor back afterwards (a true background drag isn't reliable).
+    saved = _cursor_pos() if _no_mouse_steal() else None
     move_mouse(x1, y1)
     time.sleep(0.08)
     _send_inputs([_mouse_input(win32con.MOUSEEVENTF_LEFTDOWN)])
@@ -146,6 +219,8 @@ def drag(x1: int, y1: int, x2: int, y2: int, duration_s: float = 0.4) -> dict:
         move_mouse(int(x1 + (x2 - x1) * i / steps), int(y1 + (y2 - y1) * i / steps))
         time.sleep(duration_s / steps)
     _send_inputs([_mouse_input(win32con.MOUSEEVENTF_LEFTUP)])
+    if saved:
+        _restore_cursor(saved)
     BUS.publish("action", action="drag", frm=[x1, y1], to=[x2, y2])
     return {"ok": True}
 
@@ -154,6 +229,29 @@ def scroll(x: int, y: int, amount: int) -> dict:
     """amount: positive=up, negative=down; in notches."""
     if _dry_run():
         return {"ok": True, "dry_run": True}
+    if _no_mouse_steal():
+        # WM_MOUSEWHEEL to the window under the point — no cursor move.
+        try:
+            target = win32gui.WindowFromPoint((int(x), int(y)))
+            if target:
+                wparam = (int(amount) * 120) << 16
+                lparam = (int(y) << 16) | (int(x) & 0xFFFF)  # screen coords for wheel
+                win32gui.PostMessage(target, win32con.WM_MOUSEWHEEL, wparam, lparam)
+                BUS.publish("action", action="scroll", x=x, y=y, amount=amount,
+                            via="post_message")
+                return {"ok": True, "via": "post_message"}
+        except Exception as exc:
+            logger.debug("post scroll 失败: %s", exc)
+        saved = _cursor_pos()
+        try:
+            move_mouse(x, y)
+            time.sleep(0.04)
+            _send_inputs([_mouse_input(win32con.MOUSEEVENTF_WHEEL, data=amount * 120 & 0xFFFFFFFF)])
+        finally:
+            _restore_cursor(saved)
+        BUS.publish("action", action="scroll", x=x, y=y, amount=amount,
+                    via="sendinput_restored")
+        return {"ok": True, "via": "sendinput_restored"}
     move_mouse(x, y)
     time.sleep(0.04)
     _send_inputs([_mouse_input(win32con.MOUSEEVENTF_WHEEL, data=amount * 120 & 0xFFFFFFFF)])

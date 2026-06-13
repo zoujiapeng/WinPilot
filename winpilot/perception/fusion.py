@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from ..config import CONFIG
 from ..utils.log import BUS, logger
-from ..utils.screenshot import Region, window_region
+from ..utils.screenshot import Region, screen_size, window_region
 from . import ocr, uia, vision_cv, vlm, win32
 from .model import UIElement
 
@@ -47,6 +47,15 @@ class Snapshot:
         )
         if stats:
             lines.append(f"感知维度: {stats}")
+        # Canvas/visual blind-spot: a large window yielding almost no structural
+        # elements is almost certainly canvas/game/video — tell the model so it
+        # uses VLM vision instead of blindly guessing coordinates.
+        readable = sum(1 for e in self.elements if (e.text or "").strip())
+        big = self.region.width * self.region.height > 200_000
+        if readable < 3 and big:
+            lines.append(
+                "⚠️ 此界面结构化感知几乎为空（可能是 canvas/游戏/视频/自绘内容）——"
+                "UIA/OCR/CV 读不到，请用 vlm_describe 看实际画面，不要靠坐标/颜色盲猜")
         shown = self.elements[:max_elements]
         lines.extend(element.to_line() for element in shown)
         if len(self.elements) > max_elements:
@@ -82,6 +91,48 @@ def _merge(primary: list[UIElement], secondary: list[UIElement]) -> list[UIEleme
     return merged
 
 
+def _has_readable(elements: list[UIElement]) -> bool:
+    return any((e.text or "").strip() for e in elements)
+
+
+# Lowered OCR confidence for rescue passes — the normal threshold already
+# returned nothing, so trade precision for recall.
+_ESCALATE_OCR_CONF = 0.4
+
+
+def _escalate_empty(snapshot: Snapshot, region: Region,
+                    fused: list[UIElement]) -> list[UIElement]:
+    """Rescue path when perception came back blind (no readable element).
+
+    The agent cannot act on an empty screen — before returning it, retry with
+    progressively stronger fallbacks: window OCR at lowered confidence →
+    full-screen OCR → VLM (when configured). Controlled by
+    ``fusion.escalate_on_empty`` (turn off for dimension-isolation testing).
+    """
+    steps: list[tuple[str, object]] = [
+        ("esc_ocr_window", lambda: ocr.collect(region, min_conf=_ESCALATE_OCR_CONF)),
+        ("esc_ocr_screen", lambda: ocr.collect(
+            Region(0, 0, *screen_size()), min_conf=_ESCALATE_OCR_CONF)),
+    ]
+    if vlm.is_configured():
+        steps.append(("esc_vlm", lambda: vlm.collect(region)))
+
+    for name, collect_fn in steps:
+        started = time.monotonic()
+        try:
+            collected = collect_fn()
+        except Exception as exc:
+            logger.warning("空快照升级 %s 异常: %s", name, exc)
+            collected = []
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        snapshot.dim_stats[name] = {"count": len(collected), "ms": elapsed_ms}
+        fused = _merge(fused, collected) if fused else list(collected)
+        if _has_readable(fused):
+            logger.info("空快照升级生效: %s 补回 %d 个元素", name, len(collected))
+            break
+    return fused
+
+
 def observe(hwnd: int, include_icons: bool = True) -> Snapshot:
     """Observe a window with all enabled dimensions, fused by priority."""
     region = window_region(hwnd)
@@ -89,6 +140,13 @@ def observe(hwnd: int, include_icons: bool = True) -> Snapshot:
     snapshot = Snapshot(hwnd=hwnd, title=title, region=region)
 
     order = CONFIG.enabled_dimensions()
+    # OCR on a large/complex window is the latency killer (~6s on Krita-class
+    # apps). When UIA already returned a rich, reliable element set, OCR is
+    # mostly redundant — skip it. Sparse-UIA cases (canvas/OCR-mode) still run
+    # OCR. Gated by perception.ocr_skip_when_uia_rich.
+    skip_ocr_if_rich = bool(CONFIG.get("fusion", "ocr_skip_when_uia_rich", default=True))
+    uia_rich_threshold = int(CONFIG.get("fusion", "uia_rich_threshold", default=20))
+    uia_count = 0
     fused: list[UIElement] = []
     for dim in order:
         started = time.monotonic()
@@ -96,10 +154,14 @@ def observe(hwnd: int, include_icons: bool = True) -> Snapshot:
         try:
             if dim == "uia":
                 collected = uia.collect(hwnd)
+                uia_count = sum(1 for e in collected if (e.text or "").strip())
             elif dim == "win32":
                 collected = win32.collect(hwnd)
                 collected.extend(win32.explorer_items(hwnd))
             elif dim == "ocr":
+                if skip_ocr_if_rich and uia_count >= uia_rich_threshold:
+                    snapshot.dim_stats["ocr"] = {"count": 0, "ms": 0, "skipped": "uia_rich"}
+                    continue
                 collected = ocr.collect(region)
             elif dim == "cv":
                 collected = vision_cv.detect_icon_candidates(region) if include_icons else []
@@ -122,6 +184,14 @@ def observe(hwnd: int, include_icons: bool = True) -> Snapshot:
             )
         )
     ]
+
+    # Phase 2-D: never hand the agent a blind (no readable element) snapshot
+    # without trying the rescue ladder first.
+    if (
+        not _has_readable(fused)
+        and CONFIG.get("fusion", "escalate_on_empty", default=True)
+    ):
+        fused = _escalate_empty(snapshot, region, fused)
 
     for idx, element in enumerate(fused, start=1):
         element.elem_id = idx

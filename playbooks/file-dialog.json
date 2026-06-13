@@ -1,0 +1,7 @@
+{
+  "name": "file-dialog",
+  "description": "文件对话框必胜法（另存为/打开）",
+  "keywords": ["另存为", "保存", "存为", "导出", "save", "写入", "文件", "txt", "下载到", "存到"],
+  "window_triggers": ["另存为", "打开", "选择文件", "Save As", "Open", "浏览"],
+  "content": "# 文件对话框必胜法（另存为/打开）\n不要在文件夹列表/导航树里逐级点击找目录（OCR 模式下极易迷路）！正确做法：\n1. 点击底部\"文件名\"输入框（\"*.txt\" 或已有文件名的位置）\n2. hotkey [\"ctrl\",\"a\"] 全选旧内容\n3. type_text 直接输入完整绝对路径，如 \"{desktop}\\test.txt\"\n4. hotkey [\"enter\"] 提交，并用 expect window_gone 验证对话框关闭\n本机常用路径: 桌面={desktop} 文档={documents} 下载={downloads}"
+}

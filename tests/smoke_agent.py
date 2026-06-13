@@ -31,9 +31,11 @@ json.dumps(schemas)  # must be valid JSON-serializable
 # --- system prompt ----------------------------------------------------------
 sp = prompts.system_prompt(experience_hints="测试经验", vlm_enabled=False)
 assert "expect" in sp and "observe" in sp and "测试经验" in sp
-assert "vlm_describe" not in sp
+# vlm_describe is referenced in the canvas blind-spot guidance regardless; the
+# VLM-only section (the "_VLM_SECTION" describe line) is what gates on vlm_enabled.
+assert "看不懂图片内容" not in sp
 sp_vlm = prompts.system_prompt(vlm_enabled=True)
-assert "vlm_describe" in sp_vlm
+assert "看不懂图片内容" in sp_vlm
 print("system prompt ok, len =", len(sp))
 
 # --- ToolSession read-only dispatch ----------------------------------------
